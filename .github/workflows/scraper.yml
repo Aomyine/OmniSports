@@ -5,7 +5,7 @@ permissions:
 
 on:
   schedule:
-    - cron: '0 3 * * 1'
+    - cron: '0 3 * * 2'  # Executa toda terça-feira às 03:00 (UTC)
   workflow_dispatch:
 
 jobs:
@@ -26,14 +26,14 @@ jobs:
           pip install requests beautifulsoup4 pandas lxml
 
       - name: Rodar scraper
-        run: python scraper.py
+        run: python scraper.py  # Supondo que o seu script Python se chame scraper.py
 
       - name: Commit CSV atualizado
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
 
-          git add vlr_matches_raw.csv
+          git add vlr_matches_raw.csv  # O nome do arquivo CSV gerado pelo scraper
 
           if git diff --cached --quiet; then
             echo "Nenhuma mudança no dataset"
