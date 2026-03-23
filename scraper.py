@@ -5,32 +5,20 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 
+# Headers para web scraping
 headers = {"User-Agent": "Mozilla/5.0"}
 BASE = "https://www.vlr.gg"
 CSV_FILE = "vlr_matches_raw.csv"
 
-month_map = {
-    "January": "01",
-    "February": "02",
-    "March": "03",
-    "April": "04",
-    "May": "05",
-    "June": "06",
-    "July": "07",
-    "August": "08",
-    "September": "09",
-    "October": "10",
-    "November": "11",
-    "December": "12"
-}
-
+# Função de limpeza de texto
 def clean(text):
     return (text or "").strip()
 
+# Função para converter a data no formato correto
 def convert_date(date_str):
     try:
         if "Today" in date_str:
-            return datetime.today().strftime("%Y-%m-%d")  # Retorna a data atual
+            return datetime.today().strftime("%Y-%m-%d")  # Retorna a data de hoje
         elif "Yesterday" in date_str:
             return (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")  # Retorna o dia anterior
         else:
@@ -39,7 +27,7 @@ def convert_date(date_str):
         print(f"Erro ao converter data: {e}")
         return ""
 
-# Função para capturar os links das partidas
+# Função para coletar os links das partidas
 def get_match_links(pages=5, limit=200):
 
     links = []
@@ -80,22 +68,16 @@ def scrape_match(match_url):
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "lxml")
-
     match_id = match_url.split("/")[3]
-
-    match_date = extract_date(soup)
+    match_date = convert_date(soup)
 
     rows = []
-
-    tbodys = soup.select("tbody")[:2]
+    tbodys = soup.select("tbody")[:2]  # Obtém as duas primeiras tabelas
 
     for tb in tbodys:
-
         for tr in tb.select("tr"):
-
             name = tr.select_one(".text-of")
             team = tr.select_one(".ge-text-light")
-
             if not name:
                 continue
 
@@ -103,20 +85,15 @@ def scrape_match(match_url):
             team = clean(team.get_text()) if team else ""
 
             raw_stats = [
-                clean(x.get_text())
-                for x in tr.select(".mod-stat .mod-both")
+                clean(x.get_text()) for x in tr.select(".mod-stat .mod-both")
             ]
 
-            stats = [
-                s for s in raw_stats
-                if s and not s.startswith("+") and not s.startswith("-")
-            ]
-
+            stats = [s for s in raw_stats if s and not s.startswith("+") and not s.startswith("-")]
             if len(stats) < 10:
                 continue
 
+            # Obter as estatísticas
             rating, acs, k, d, a, kast, adr, hs, fk, fd = stats[:10]
-
             first_kill_death_diff = 0
             if fk and fd:
                 try:
@@ -147,30 +124,23 @@ def scrape_match(match_url):
 
 # Função principal
 def main():
-
     if os.path.exists(CSV_FILE):
         old_df = pd.read_csv(CSV_FILE)
-
         existing_ids = set(old_df["match_id"].astype(str).unique())
-
         print("CSV existente carregado. Partidas já salvas:", len(existing_ids))
-
     else:
         old_df = pd.DataFrame()
         existing_ids = set()
         print("Nenhum CSV anterior encontrado. Vai criar do zero.")
 
     match_links = get_match_links(pages=5, limit=200)
-
     print("Links coletados:", len(match_links))
 
     new_rows = []
     new_matches = 0
 
     for i, link in enumerate(match_links, start=1):
-
         match_id = link.split("/")[3]
-
         if match_id in existing_ids:
             continue
 
@@ -178,14 +148,11 @@ def main():
 
         try:
             mid, rows = scrape_match(link)
-
             if not rows:
                 continue
-
             new_rows.extend(rows)
             existing_ids.add(mid)
             new_matches += 1
-
         except Exception as e:
             print("Erro:", link, e)
 
@@ -197,19 +164,15 @@ def main():
     print("Novas partidas adicionadas:", new_matches)
 
     new_df = pd.DataFrame(new_rows)
-
     if not old_df.empty and not new_df.empty:
         final_df = pd.concat([old_df, new_df], ignore_index=True)
-
     elif not old_df.empty:
         final_df = old_df
-
     else:
         final_df = new_df
 
     if not final_df.empty:
         final_df["match_id"] = final_df["match_id"].astype(str)
-
         final_df = final_df.drop_duplicates(subset=["match_id", "player"], keep="first")
 
     final_df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
