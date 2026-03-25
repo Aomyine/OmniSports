@@ -5,101 +5,121 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
 
-# Headers para web scraping
 headers = {"User-Agent": "Mozilla/5.0"}
 BASE = "https://www.vlr.gg"
 CSV_FILE = "vlr_matches_raw.csv"
 
-# Função de limpeza de texto
 def clean(text):
     return (text or "").strip()
 
-# Função para converter a data no formato correto
+# =========================
+# DATA
+# =========================
 def convert_date(date_str):
     try:
-        if "Today" in date_str:
-            return datetime.today().strftime("%Y-%m-%d")  # Retorna a data de hoje
-        elif "Yesterday" in date_str:
-            return (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")  # Retorna o dia anterior
-        else:
-            return datetime.strptime(date_str, "%a, %B %d, %Y").strftime("%Y-%m-%d")  # Converte para o formato desejado
+        text = clean(date_str)
+
+        if "Today" in text:
+            return datetime.today().strftime("%Y-%m-%d")
+
+        if "Yesterday" in text:
+            return (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        base_text = text.split("Today")[0].split("Yesterday")[0].strip()
+        return datetime.strptime(base_text, "%a, %B %d, %Y").strftime("%Y-%m-%d")
+
     except Exception as e:
-        print(f"Erro ao converter data: {e}")
+        print(f"Erro ao converter data '{date_str}': {e}")
         return ""
 
-# Função para coletar os links das partidas
-def get_match_links(pages=5, limit=200):
-
-    links = []
+# =========================
+# LINKS + DATA (CORRETO)
+# =========================
+def get_match_links_with_date(pages=5, limit=200):
+    matches_data = []
     seen = set()
 
     for page in range(1, pages + 1):
-
         url = "https://www.vlr.gg/matches/results" if page == 1 else f"https://www.vlr.gg/matches/results/?page={page}"
-
         print("Coletando:", url)
 
         r = requests.get(url, headers=headers, timeout=30)
         r.raise_for_status()
-
         soup = BeautifulSoup(r.text, "lxml")
 
-        matches = soup.select("a.wf-module-item")
+        current_date = None
+        elements = soup.select(".wf-label.mod-large, a.wf-module-item")
 
-        for m in matches:
+        for el in elements:
 
-            href = m.get("href")
+            # pega data
+            if el.name == "div" and "wf-label" in el.get("class", []):
+                current_date = convert_date(el.get_text(" ", strip=True))
 
-            if href and href.startswith("/"):
-                full = BASE + href
+            # pega link
+            elif el.name == "a":
+                href = el.get("href")
 
-                if full not in seen:
-                    seen.add(full)
-                    links.append(full)
+                if href and href.startswith("/"):
+                    full_url = BASE + href
 
-            if len(links) >= limit:
-                return links[:limit]
+                    if full_url not in seen:
+                        seen.add(full_url)
+                        matches_data.append({
+                            "url": full_url,
+                            "date": current_date
+                        })
 
-    return links[:limit]
+            if len(matches_data) >= limit:
+                return matches_data
 
-# Função para raspar os dados de uma partida
-def scrape_match(match_url):
+        time.sleep(0.5)
+
+    return matches_data
+
+# =========================
+# SCRAPE MATCH
+# =========================
+def scrape_match(match_url, match_date):
+
     r = requests.get(match_url, headers=headers, timeout=30)
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "lxml")
     match_id = match_url.split("/")[3]
-    match_date = convert_date(soup)
 
     rows = []
-    tbodys = soup.select("tbody")[:2]  # Obtém as duas primeiras tabelas
+    tbodys = soup.select("tbody")[:2]
 
     for tb in tbodys:
         for tr in tb.select("tr"):
+
             name = tr.select_one(".text-of")
             team = tr.select_one(".ge-text-light")
+
             if not name:
                 continue
 
             player = clean(name.get_text())
             team = clean(team.get_text()) if team else ""
 
-            raw_stats = [
-                clean(x.get_text()) for x in tr.select(".mod-stat .mod-both")
-            ]
+            raw_stats = [clean(x.get_text()) for x in tr.select(".mod-stat .mod-both")]
 
             stats = [s for s in raw_stats if s and not s.startswith("+") and not s.startswith("-")]
+
             if len(stats) < 10:
                 continue
 
-            # Obter as estatísticas
             rating, acs, k, d, a, kast, adr, hs, fk, fd = stats[:10]
-            first_kill_death_diff = 0
-            if fk and fd:
+
+            # FK/FD DIFF CALCULADO (FIX)
+            def to_int(x):
                 try:
-                    first_kill_death_diff = int(fk) - int(fd)
-                except ValueError:
-                    first_kill_death_diff = 0
+                    return int(float(str(x)))
+                except:
+                    return 0
+
+            fk_diff = to_int(fk) - to_int(fd)
 
             rows.append({
                 "match_id": match_id,
@@ -112,58 +132,69 @@ def scrape_match(match_url):
                 "Kills": k,
                 "Deaths": d,
                 "Assists": a,
+                "K/D Diff": "",  # opcional manter vazio
                 "KAST": kast,
                 "ADR": adr,
                 "HS%": hs,
                 "First Kills": fk,
                 "First Deaths": fd,
-                "First Kill/Death Diff": first_kill_death_diff
+                "First Kill/Death Diff": fk_diff
             })
 
     return match_id, rows
 
-# Função principal
+# =========================
+# MAIN
+# =========================
 def main():
+
     if os.path.exists(CSV_FILE):
         old_df = pd.read_csv(CSV_FILE)
         existing_ids = set(old_df["match_id"].astype(str).unique())
-        print("CSV existente carregado. Partidas já salvas:", len(existing_ids))
+        print("CSV carregado:", len(existing_ids))
     else:
         old_df = pd.DataFrame()
         existing_ids = set()
-        print("Nenhum CSV anterior encontrado. Vai criar do zero.")
+        print("Criando novo CSV")
 
-    match_links = get_match_links(pages=5, limit=200)
-    print("Links coletados:", len(match_links))
+    matches = get_match_links_with_date(pages=5, limit=200)
+
+    print("Links coletados:", len(matches))
 
     new_rows = []
     new_matches = 0
 
-    for i, link in enumerate(match_links, start=1):
-        match_id = link.split("/")[3]
+    for i, match in enumerate(matches, start=1):
+
+        match_id = match["url"].split("/")[3]
+
         if match_id in existing_ids:
             continue
 
-        print(f"[{i}/{len(match_links)}] Nova partida -> {match_id}")
+        print(f"[{i}/{len(matches)}] {match['url']} | data={match['date']}")
 
         try:
-            mid, rows = scrape_match(link)
+            mid, rows = scrape_match(match["url"], match["date"])
+
             if not rows:
                 continue
+
             new_rows.extend(rows)
             existing_ids.add(mid)
             new_matches += 1
-        except Exception as e:
-            print("Erro:", link, e)
 
-        time.sleep(0.4)
+        except Exception as e:
+            print("Erro:", match["url"], e)
+
+        time.sleep(0.5)
 
         if new_matches >= 200:
             break
 
-    print("Novas partidas adicionadas:", new_matches)
+    print("Novas partidas:", new_matches)
 
     new_df = pd.DataFrame(new_rows)
+
     if not old_df.empty and not new_df.empty:
         final_df = pd.concat([old_df, new_df], ignore_index=True)
     elif not old_df.empty:
@@ -177,8 +208,8 @@ def main():
 
     final_df.to_csv(CSV_FILE, index=False, encoding="utf-8-sig")
 
-    print("\nCSV atualizado:", CSV_FILE)
-    print("Total linhas:", len(final_df))
+    print("\nFINALIZADO")
+    print("Linhas:", len(final_df))
 
 if __name__ == "__main__":
     main()
