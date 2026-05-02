@@ -26,7 +26,7 @@ jobs:
           pip install requests beautifulsoup4 pandas lxml
 
       - name: Rodar scraper de mapas
-        run: python vlr_scraper.py
+        run: python scraper_maps.py
 
       - name: Commit CSV atualizado
         run: |
