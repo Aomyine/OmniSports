@@ -33,7 +33,7 @@ def convert_date(date_str):
         return ""
 
 # =========================
-# LINKS + DATA (CORRETO)
+# LINKS + DATA 
 # =========================
 def get_match_links_with_date(pages=5, limit=200):
     matches_data = []
